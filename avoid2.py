@@ -51,71 +51,103 @@ import robotica
 # [14] delantero-izquierda
 # [15] lateral izquierdo
 
+ultimo_error = 0.0
+
 def avoid(readings, side):
-    target_dist = 0.4
-    max_dist = 0.8
-    base_speed = 1.0
+    global ultimo_error
     
-    # Si aún no hemos decidido un lado, vamos recto
+    # Parámetros: ¡MÁS RÁPIDO!
+    target_dist = 0.50  
+    VEL_MAX = 1.0       # Velocidad máxima aumentada al doble
+    KP = 4.0
+    KD = 2.0
+    UMBRAL_VACIO = 1.2  
+    
     if side is None:
-        return base_speed, base_speed
+        return VEL_MAX, VEL_MAX
 
     front_center = readings[3]
-    
-    # Lógica dinámica según el lado elegido
-    if side == 'right':
-        front_side = readings[5]
-        lateral = readings[7]
-        if front_center < 0.4 or front_side < 0.3:
-            return -0.3, 0.3 # Giro a la izquierda para seguir pared derecha
-        if lateral < (target_dist - 0.05): 
-            return base_speed * 0.5, base_speed * 1.0
-        elif lateral >= max_dist:
-            return base_speed, base_speed # Ir recto si pierde la pared
-        elif lateral > (target_dist + 0.05):
-            return base_speed * 0.8, base_speed * 0.5
-        else:
-            return base_speed, base_speed
 
+    # --- LÓGICA PARA LADO DERECHO ---
+    if side == 'right':
+        d_diag = readings[6]
+        front_side = readings[5]
+        lat_derecho = readings[7]   
+        tras_derecho = readings[8]  
+        
+        # 1. ¡APAGAR TODO Y HACER GIRO EN U! (OVERRIDE)
+        if lat_derecho > UMBRAL_VACIO:
+            if tras_derecho < UMBRAL_VACIO:
+                # FASE 1: El morro asoma, pero el culo sigue en la pared.
+                # OBLIGATORIO ir recto a toda velocidad para pasar el filo rápido.
+                return VEL_MAX, VEL_MAX
+            else:
+                # FASE 2: Ya pasamos la pared por completo.
+                # APAGAMOS TODO y hacemos un giro en U brusco.
+                # Rueda izquierda a tope, rueda derecha hacia atrás (-0.5).
+                return VEL_MAX, -VEL_MAX * 0.5
+
+        # 2. EVASIÓN FRONTAL RÁPIDA (Esquina interior)
+        if front_center < 0.5 or front_side < 0.4:
+            # Frenazo y giro brusco a la izquierda
+            return -VEL_MAX * 0.5, VEL_MAX
+
+        # 3. SEGUIMIENTO DE PARED NORMAL (PD)
+        # Si llegamos aquí, es que hay pared y no estamos en una esquina.
+        error = d_diag - target_dist
+        ajuste = (error * KP) + ((error - ultimo_error) * KD)
+        ultimo_error = error
+
+    # --- LÓGICA PARA LADO IZQUIERDO ---
     elif side == 'left':
+        d_diag = readings[1]
         front_side = readings[2]
-        lateral = readings[15]
-        if front_center < 0.4 or front_side < 0.3:
-            return 0.3, -0.3 # Giro a la derecha para seguir pared izquierda
-        if lateral < (target_dist - 0.05):
-            return base_speed * 1.0, base_speed * 0.5
-        elif lateral >= max_dist:
-            return base_speed, base_speed
-        elif lateral > (target_dist + 0.05):
-            return base_speed * 0.5, base_speed * 0.8
-        else:
-            return base_speed, base_speed
-            
-    return 0.0, 0.0
+        lat_izquierdo = readings[15]
+        tras_izquierdo = readings[12]
+
+        # 1. ¡APAGAR TODO Y HACER GIRO EN U! (OVERRIDE)
+        if lat_izquierdo > UMBRAL_VACIO:
+            if tras_izquierdo < UMBRAL_VACIO:
+                return VEL_MAX, VEL_MAX
+            else:
+                # Rueda derecha a tope, rueda izquierda hacia atrás
+                return -VEL_MAX * 0.5, VEL_MAX
+
+        # 2. EVASIÓN FRONTAL RÁPIDA
+        if front_center < 0.5 or front_side < 0.4:
+            return VEL_MAX, -VEL_MAX * 0.5
+
+        # 3. SEGUIMIENTO DE PARED NORMAL (PD)
+        error = d_diag - target_dist
+        ajuste = (error * KP) + ((error - ultimo_error) * KD)
+        ultimo_error = error
+        ajuste = -ajuste 
+
+    # --- FINALIZACIÓN DEL PD ---
+    # Solo afecta si no hemos hecho "return" arriba
+    ajuste = max(min(ajuste, VEL_MAX * 0.6), -VEL_MAX * 0.6)
+    lspeed = VEL_MAX + ajuste
+    rspeed = VEL_MAX - ajuste
+
+    return lspeed, rspeed
+
 
 def main(args=None):
     coppelia = robotica.Coppelia()
     robot = robotica.P3DX(coppelia.sim, 'PioneerP3DX')
     coppelia.start_simulation()
     
-    # Empezamos sin un lado definido
     wall_side = None 
     
     while coppelia.is_running():
         readings = robot.get_sonar()
         
-        # --- LÓGICA DE DECISIÓN DINÁMICA ---
         if wall_side is None:
-            # Si detectamos algo de frente...
             if readings[3] < 0.6: 
-                # Comparamos sensores diagonales: ¿está la pared más a la izquierda o derecha?
                 if readings[2] < readings[5]:
                     wall_side = "left"
-                    print("Pared detectada: Decido seguir por la IZQUIERDA")
                 else:
                     wall_side = "right"
-                    print("Pared detectada: Decido seguir por la DERECHA")
-        # ----------------------------------
 
         lspeed, rspeed = avoid(readings, side=wall_side)
         robot.set_speed(lspeed, rspeed)
