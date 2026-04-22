@@ -54,7 +54,7 @@ def avoid(readings, side):
     global ultimo_error
     
     target_dist_normal = 0.50  
-    VEL_MAX = 1.0
+    VEL_MAX = 2.0
     
     VEL_CURVA_ABIERTA = VEL_MAX * 0.7 
     
